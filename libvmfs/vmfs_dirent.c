@@ -186,6 +186,11 @@ static int vmfs_dir_cache_entries(vmfs_dir_t *d)
    int cn_page;
    if (d->buf != NULL)
       free(d->buf);
+   if (d->ar_hb_exist != NULL)
+      free(d->ar_hb_exist);
+
+   d->buf = NULL;
+   d->ar_hb_exist = NULL;
 
    dir_size = vmfs_file_get_size(d->dir);
    cn_page = (dir_size+8191) / (4096*2); // get ceil number of pages;
@@ -193,14 +198,19 @@ static int vmfs_dir_cache_entries(vmfs_dir_t *d)
 
    if (!(d->buf = calloc(1,dir_size)))
       return(-1);
-   if (!(d->ar_hb_exist = calloc(1, cn_page)))
+   if (!(d->ar_hb_exist = calloc(1, cn_page))) {
+      free(d->buf);
+      d->buf = NULL;
       return(-1);
+   }
    if (vmfs_file_pread(d->dir,d->buf,dir_size,0) != dir_size) {
       free(d->buf);
+      d->buf = NULL;
+      free(d->ar_hb_exist);
+      d->ar_hb_exist = NULL;
       return(-1);
    }
    memcpy(d->ar_hb_exist, d->buf+0x10040, cn_page);
-//	hexdump(d->buf, dir_size);
    return(0);
 }
 
@@ -217,10 +227,15 @@ static vmfs_dir_t *vmfs_dir_open_from_file(vmfs_file_t *file)
 
    isDir=(((file->inode->cmode) & S_IFMT) == S_IFDIR)?1:0;
    dprintf("isDir: %d\n", isDir);
-   if (!(d = calloc(1, sizeof(*d))) || ((file->inode->type != VMFS_FILE_TYPE_DIR) && !isDir)) {
-       dprintf("file->inode->type 0x%x, file->inode->cmode: 0x%x\n", file->inode->type, file->inode->cmode);
-        vmfs_file_close(file);
-        return NULL;
+   if (!(d = calloc(1, sizeof(*d)))) {
+      vmfs_file_close(file);
+      return NULL;
+   }
+   if ((file->inode->type != VMFS_FILE_TYPE_DIR) && !isDir) {
+      dprintf("file->inode->type 0x%x, file->inode->cmode: 0x%x\n", file->inode->type, file->inode->cmode);
+      free(d);
+      vmfs_file_close(file);
+      return NULL;
    }
 
 

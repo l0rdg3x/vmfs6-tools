@@ -79,7 +79,7 @@ static void vmfs_fuse_setattr(fuse_req_t req, fuse_ino_t ino,
       inode->atime = attr->st_atime;
 
    if (to_set & FUSE_SET_ATTR_MTIME)
-      inode->atime = attr->st_mtime;
+      inode->mtime = attr->st_mtime;
 
    if (to_set & FUSE_SET_ATTR_SIZE)
       vmfs_inode_truncate(inode,attr->st_size);
@@ -138,6 +138,7 @@ static void vmfs_fuse_mknod(fuse_req_t req,fuse_ino_t parent,const char *name,
    }        
 
    if ((res = vmfs_file_create(dir,name,mode,&inode)) < 0) {
+      vmfs_dir_close(dir);
       fuse_reply_err(req, -res);
       return;
    }
@@ -168,6 +169,7 @@ static void vmfs_fuse_mkdir(fuse_req_t req, fuse_ino_t parent,
    }        
 
    if ((res = vmfs_dir_create(dir,name,mode,&inode)) < 0) {
+      vmfs_dir_close(dir);
       fuse_reply_err(req, -res);
       return;
    }
@@ -233,8 +235,7 @@ static void vmfs_fuse_opendir(fuse_req_t req, fuse_ino_t ino,
 static void vmfs_fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
                               off_t off, struct fuse_file_info *fi)
 {
-//	FILE* fp;
-   char buf[size];
+   char *buf;
    const vmfs_dirent_t *entry;
    struct stat st = {0, };
    size_t sz;
@@ -244,16 +245,20 @@ static void vmfs_fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
       return;
    }
 
+   if (!(buf = malloc(size))) {
+      fuse_reply_err(req, ENOMEM);
+      return;
+   }
+
    if ((entry = vmfs_dir_read((vmfs_dir_t *)(unsigned long)fi->fh))) {
       st.st_mode = vmfs_file_type2mode(entry->type);
       st.st_ino = blkid2ino(entry->block_id);
       sz = fuse_add_direntry(req, buf, size, entry->name, &st, off + 1);
-//	  fp = fopen("/tmp/fusevmfs.log","a");	 
-//	  fprintf(fp, "0x%016x %s off %ld ret of fuse %d\n", entry->block_id, entry->name, off, sz);
-//	  fclose(fp);
       fuse_reply_buf(req, buf, sz);
    } else
       fuse_reply_buf(req, NULL, 0);
+
+   free(buf);
 }
 
 static void vmfs_fuse_releasedir(fuse_req_t req, fuse_ino_t ino,
@@ -354,6 +359,7 @@ static void vmfs_fuse_create(fuse_req_t req, fuse_ino_t parent,
    if (!(f = vmfs_file_open_from_inode(inode))) {
       vmfs_inode_release(inode);
       fuse_reply_err(req,ENOMEM);
+      return;
    }
 
    fi->fh = (uint64_t)(unsigned long)f;
@@ -369,7 +375,7 @@ static void vmfs_fuse_create(fuse_req_t req, fuse_ino_t parent,
 static void vmfs_fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size,
                            off_t off, struct fuse_file_info *fi)
 {
-   char buf[size];
+   char *buf;
    ssize_t sz;
 
    if (!fi->fh) {
@@ -377,15 +383,22 @@ static void vmfs_fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size,
       return;
    }
 
+   if (!(buf = malloc(size))) {
+      fuse_reply_err(req, ENOMEM);
+      return;
+   }
+
    sz = vmfs_file_pread((vmfs_file_t *)(unsigned long)fi->fh,
                         (u_char *)buf, size, off);
 
    if (sz < 0) {
+      free(buf);
       fuse_reply_err(req, -sz);
       return;
    }
 
    fuse_reply_buf(req, buf, sz);
+   free(buf);
 }
 
 static void vmfs_fuse_write(fuse_req_t req, fuse_ino_t ino, 

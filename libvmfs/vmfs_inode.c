@@ -300,6 +300,8 @@ int vmfs_inode_alloc(vmfs_fs_t *fs,u_int type,mode_t mode,vmfs_inode_t **inode)
 int doubleIndirectAddressing(const vmfs_inode_t *inode,off_t pos,uint64_t *blk_id)
 {
    const vmfs_fs_t *fs = inode->fs;
+   if (!fs->sbc)
+      return(-EIO);
    DECL_ALIGNED_BUFFER_WOL(buf,fs->sbc->bmh.data_size);
 
    u_int blk_index;
@@ -398,6 +400,8 @@ int vmfs_inode_get_block(const vmfs_inode_t *inode,off_t pos,uint64_t *blk_id)
   
 	  case VMFS_BLK_TYPE_PB2:
 	  {
+		  if (!fs->pb2)
+			 return(-EIO);
 		  DECL_ALIGNED_BUFFER_WOL(buf,fs->pb2->bmh.data_size);
 		  uint64_t pb_blk_id;
 		  uint32_t blk_per_pb;
@@ -446,6 +450,8 @@ int vmfs_inode_get_block(const vmfs_inode_t *inode,off_t pos,uint64_t *blk_id)
 		      dprintf("PB blk_id 0x%lx\n", *blk_id);
 
           } else {
+	         if (!fs->pbc || !fs->sbc)
+	            return(-EIO);
 	         DECL_ALIGNED_BUFFER_WOL(buf,fs->pbc->bmh.data_size);
 	         uint64_t pb_blk_id;
 	         uint32_t blk_per_pb;

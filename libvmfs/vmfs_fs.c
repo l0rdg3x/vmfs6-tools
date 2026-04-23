@@ -127,10 +127,99 @@ static vmfs_bitmap_t *vmfs_open_meta_file(vmfs_dir_t *root_dir, char *name,
    return bitmap;
 }
 
+/*
+ * Close a bootstrap bitmap whose inode was heap-allocated by
+ * vmfs_bootstrap_meta_bitmaps.  vmfs_bitmap_close releases the inode's
+ * ref_count to 0 but does not free it (pprev==NULL); we free it here.
+ */
+static void vmfs_close_bootstrap_bitmap(vmfs_bitmap_t *b)
+{
+   vmfs_inode_t *inode = NULL;
+   if (b && b->f)
+      inode = b->f->inode;
+   vmfs_bitmap_close(b);
+   free(inode);
+}
+
+/*
+ * Scan the first 16 FDC items looking for SBC, PB2 and PBC meta-files.
+ * We need these bootstrapped before we can read the root directory, because
+ * the root directory itself may use SB or PB2 blocks.
+ *
+ * Only considers inodes whose ZLA is FB (file-block); those can be read
+ * without any of the bitmaps we are trying to find.  The inode is
+ * heap-allocated with ref_count=1 and pprev=NULL (not registered in the
+ * hash table) so that vmfs_bitmap_close / vmfs_close_bootstrap_bitmap can
+ * clean it up safely.
+ */
+static void vmfs_bootstrap_meta_bitmaps(vmfs_fs_t *fs)
+{
+   uint32_t item;
+
+   for (item = 1; item <= 16; item++) {
+      uint64_t blk_id = VMFS_BLK_FD_BUILD(0, item, 0);
+      vmfs_inode_t *inode;
+      vmfs_bitmap_t *b;
+      vmfs_bitmap_entry_t bme;
+      uint32_t zla;
+
+      if (!(inode = calloc(1, sizeof(*inode))))
+         continue;
+
+      if (vmfs_inode_get(fs, blk_id, inode) < 0) {
+         free(inode);
+         continue;
+      }
+
+      if (inode->type != VMFS_FILE_TYPE_META) {
+         free(inode);
+         continue;
+      }
+
+      /* Only read meta-files stored in plain file-blocks; any other ZLA
+       * would require bitmaps we haven't found yet. */
+      zla = inode->zla;
+      if (zla >= VMFS5_ZLA_BASE)
+         zla -= VMFS5_ZLA_BASE;
+      if (zla != VMFS_BLK_TYPE_FB) {
+         free(inode);
+         continue;
+      }
+
+      inode->fs = fs;
+      inode->ref_count = 1;   /* pprev stays NULL: not in hash table */
+
+      b = vmfs_bitmap_open_from_inode(inode);
+      if (!b) {
+         /* vmfs_bitmap_open_from_file may have called vmfs_inode_release
+          * (ref_count→0, not freed because pprev==NULL); free either way. */
+         free(inode);
+         continue;
+      }
+
+      if (vmfs_bitmap_get_entry(b, 0, 0, &bme) != 0) {
+         vmfs_close_bootstrap_bitmap(b);
+         continue;
+      }
+
+      if (!fs->sbc && bme.mdh.magic == VMFS_BITMAP_MAGIC_SBC)
+         fs->sbc = b;
+      else if (!fs->pb2 && bme.mdh.magic == VMFS_BITMAP_MAGIC_PB2)
+         fs->pb2 = b;
+      else if (!fs->pbc && bme.mdh.magic == VMFS_BITMAP_MAGIC_PBC)
+         fs->pbc = b;
+      else
+         vmfs_close_bootstrap_bitmap(b);
+   }
+}
+
 /* Open all the VMFS meta files */
 static int vmfs_open_all_meta_files(vmfs_fs_t *fs)
 {
    vmfs_bitmap_t *fdc = fs->fdc;
+   vmfs_bitmap_t *sbc_boot = fs->sbc;   /* bootstrap bitmaps (may be NULL) */
+   vmfs_bitmap_t *pb2_boot = fs->pb2;
+   vmfs_bitmap_t *pbc_boot = fs->pbc;
    vmfs_dir_t *root_dir;
 
    /* Read the first inode */
@@ -174,7 +263,18 @@ static int vmfs_open_all_meta_files(vmfs_fs_t *fs)
                                  "pointer sub bitmap (SBC)");
    if (!fs->sbc)
       return(-1);
+
+   /* Close bootstrap FDC (stack-allocated inode; ref_count=1 set by caller). */
    vmfs_bitmap_close(fdc);
+
+   /* Close any bootstrap bitmaps that were replaced by the real ones above. */
+   if (sbc_boot && sbc_boot != fs->sbc)
+      vmfs_close_bootstrap_bitmap(sbc_boot);
+   if (pb2_boot && pb2_boot != fs->pb2)
+      vmfs_close_bootstrap_bitmap(pb2_boot);
+   if (pbc_boot && pbc_boot != fs->pbc)
+      vmfs_close_bootstrap_bitmap(pbc_boot);
+
    vmfs_dir_close(root_dir);
    return(0);
 }
@@ -207,6 +307,8 @@ static int vmfs_read_fdc_base(vmfs_fs_t *fs)
    inode.blk_count = 1;
    inode.zla = VMFS_BLK_TYPE_FB;
    inode.blocks[0] = VMFS_BLK_FB_BUILD(fdc_base, 0);
+   /* ref_count=1, pprev=NULL: stack inode not in hash table; vmfs_inode_release
+    * will decrement to 0 without freeing, so vmfs_bitmap_close is safe. */
    inode.ref_count = 1;
    dprintf("fdc_base %lu blocks0 %lx (%lx %lx shift %d)\n", fdc_base, inode.blocks[0], 
    	VMFS_BLK_VALUE(fdc_base, VMFS_BLK_FB_ITEM_VALUE_LSB_MASK),
@@ -214,6 +316,10 @@ static int vmfs_read_fdc_base(vmfs_fs_t *fs)
    	VMFS_BLK_SHIFT(VMFS_BLK_FB_ITEM_LSB_MASK));
 
    fs->fdc = vmfs_bitmap_open_from_inode(&inode);
+
+   /* Bootstrap SBC/PB2/PBC so the root directory (which may use SB or PB2
+    * blocks) can be read inside vmfs_open_all_meta_files. */
+   vmfs_bootstrap_meta_bitmaps(fs);
 
    /* Read the meta files */
    if (vmfs_open_all_meta_files(fs) == -1)

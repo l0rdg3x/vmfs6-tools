@@ -4,8 +4,8 @@
 *.8
 version
 config.cache
-debugvmfs/debugvmfs
-fsck.vmfs/fsck.vmfs
+debugvmfs6/debugvmfs6
+fsck.vmfs6/fsck.vmfs6
 imager/imager
-vmfs-fuse/vmfs-fuse
-vmfs-lvm/vmfs-lvm
+vmfs6-fuse/vmfs6-fuse
+vmfs6-lvm/vmfs6-lvm

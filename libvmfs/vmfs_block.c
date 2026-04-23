@@ -210,9 +210,11 @@ int vmfs_block_zeroize_fb(const vmfs_fs_t *fs,uint64_t blk_id)
 }
 
 /* Free blocks hold by a pointer block */
-int vmfs_block_free_pb(const vmfs_fs_t *fs,uint32_t pb_blk,                     
+int vmfs_block_free_pb(const vmfs_fs_t *fs,uint32_t pb_blk,
                        u_int start,u_int end)
-{     
+{
+   if (!fs->pbc)
+      return(-EIO);
    DECL_ALIGNED_BUFFER(buf,fs->pbc->bmh.data_size);
    uint32_t pbc_entry,pbc_item;
    uint64_t blk_id;
@@ -251,6 +253,8 @@ int vmfs_block_free_pb(const vmfs_fs_t *fs,uint32_t pb_blk,
 ssize_t vmfs_block_read_sb(const vmfs_fs_t *fs,uint64_t blk_id,off_t pos,
                            u_char *buf,size_t len)
 {
+   if (!fs->sbc)
+      return(-EIO);
    DECL_ALIGNED_BUFFER_WOL(tmpbuf,fs->sbc->bmh.data_size);
    uint32_t offset,sbc_entry,sbc_item;
    size_t clen;
@@ -275,6 +279,8 @@ ssize_t vmfs_block_read_sb(const vmfs_fs_t *fs,uint64_t blk_id,off_t pos,
 ssize_t vmfs_block_write_sb(const vmfs_fs_t *fs,uint64_t blk_id,off_t pos,
                             u_char *buf,size_t len)
 {
+   if (!fs->sbc)
+      return(-EIO);
    DECL_ALIGNED_BUFFER_WOL(tmpbuf,fs->sbc->bmh.data_size);
    uint32_t offset,sbc_entry,sbc_item;
    size_t clen;

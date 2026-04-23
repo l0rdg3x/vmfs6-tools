@@ -450,9 +450,12 @@ int vmfs_inode_get_block(const vmfs_inode_t *inode,off_t pos,uint64_t *blk_id)
 		      dprintf("PB blk_id 0x%lx\n", *blk_id);
 
           } else {
-	         if (!fs->pbc || !fs->sbc)
+	         /* VMFS6 uses SBC (not PBC) to store the pointer-block data.
+	          * Use sbc->bmh.data_size for the buffer to match the actual
+	          * vmfs_bitmap_get_item(fs->sbc,...) call below. */
+	         if (!fs->sbc)
 	            return(-EIO);
-	         DECL_ALIGNED_BUFFER_WOL(buf,fs->pbc->bmh.data_size);
+	         DECL_ALIGNED_BUFFER_WOL(buf,fs->sbc->bmh.data_size);
 	         uint64_t pb_blk_id;
 	         uint32_t blk_per_pb;
 	         u_int pb_index;
